@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frankrijk Kenteken Tracker</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            display: flex;
+            height: 100vh;
+            background-color: #f4f6f9;
+            color: #333;
+        }
+
+        /* Sidebar Styling */
+        #sidebar {
+            width: 350px;
+            background-color: #ffffff;
+            box-shadow: 4px 0 15px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            padding: 25px;
+            z-index: 1000;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 5px;
+            color: #2c3e50;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: #7f8c8d;
+            margin-bottom: 25px;
+        }
+
+        .stats-container {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 25px;
+            border: 1px solid #e9ecef;
+        }
+
+        #stats-text {
+            font-weight: 600;
+            font-size: 1.1rem;
+            color: #27ae60;
+            margin-bottom: 5px;
+        }
+
+        /* Zoekfunctie */
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 25px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px 15px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: #3498db;
+        }
+
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            background-color: #3498db;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        /* Actieknop sectie onderaan */
+        .actions {
+            margin-top: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .btn-secondary {
+            background-color: #95a5a6;
+        }
+        .btn-secondary:hover {
+            background-color: #7f8c8d;
+        }
+
+        .btn-danger {
+            background-color: #e74c3c;
+            margin-top: 15px;
+        }
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+
+        /* Kaart gebied */
+        #map {
+            flex: 1;
+            background-color: #f8f9fa; /* Strakke lichte achtergrond in plaats van drukke wegenkaart */
+        }
+
+        /* Subtiele Kentekennummers op de kaart */
+        .dept-label {
+            color: #2c3e50;
+            font-family: sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            text-align: center;
+            pointer-events: none; /* Klikken gaat dwars door de tekst heen naar de kaart */
+            text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+        }
+
+        /* Mobiele optimalisatie */
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+            #sidebar {
+                width: 100%;
+                height: auto;
+                padding: 15px;
+            }
+            #map {
+                height: 60vh;
+            }
+            .actions {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            .actions button {
+                flex: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h1>Frankrijk Kentekens</h1>
+        <p class="subtitle">Klik op een departement om hem af te strepen.</p>
+
+        <div class="stats-container">
+            <div id="stats-text">0 / 0 gezien</div>
+            <p style="font-size: 0.85rem; color: #7f8c8d;">van alle departementen afgevinkt</p>
+        </div>
+
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Zoek op nummer of naam...">
+            <button id="searchBtn">Zoek</button>
+        </div>
+
+        <div class="actions">
+            <button id="exportBtn" class="btn-secondary">Exporteer Voortgang</button>
+            <button id="importBtn" class="btn-secondary">Importeer Voortgang</button>
+            <input type="file" id="importFile" style="display: none;" accept=".json">
+            <button id="resetBtn" class="btn-danger">Reset Alles</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // 1. Initialiseer de kaart gefocust op het centrum van Frankrijk
+        const map = L.map('map', {
+            zoomSnap: 0.5,
+            minZoom: 5.5,
+            maxZoom: 10
+        }).setView([46.4, 2.3], 6);
+
+        // Gezien-lijst ophalen uit LocalStorage (of een lege lijst starten)
+        let seenDepartments = JSON.parse(localStorage.getItem('fr_seen_plates')) || [];
+        let geojsonLayer;
+        let labelLayerGroup = L.layerGroup().addTo(map);
+
+        // 2. Styling definities voor de gebieden
+        function getStyle(feature) {
+            const code = feature.properties.code;
+            const isSeen = seenDepartments.includes(code);
+            return {
+                fillColor: isSeen ? '#2ecc71' : '#e0e0e0', // Groen als gezien, zachtgrijs als niet gezien
+                weight: 1.5,
+                opacity: 1,
+                color: '#ffffff', // Witte strakke randen tussen gebieden
+                fillOpacity: 0.85
+            };
+        }
+
+        // Update statistieken in de sidebar
+        function updateStats() {
+            if (!geojsonLayer) return;
+            const total = geojsonLayer.getLayers().length;
+            const seenCount = seenDepartments.length;
+            const percentage = total > 0 ? Math.round((seenCount / total) * 100) : 0;
+            document.getElementById('stats-text').innerText = `${seenCount} van de ${total} (${percentage}%)`;
+        }
+
+        // Wisselen tussen wel/niet gezien bij een klik
+        function toggleDepartment(code, layer) {
+            const index = seenDepartments.indexOf(code);
+            if (index > -1) {
+                seenDepartments.splice(index, 1); // Verwijder indien al aanwezig
+            } else {
+                seenDepartments.push(code); // Voeg toe indien nieuw
+            }
+            localStorage.setItem('fr_seen_plates', JSON.stringify(seenDepartments));
+            
+            geojsonLayer.resetStyle(layer); // Update de kleur direct op de kaart
+            updateStats();
+        }
+
+        // 3. Interactie per departement toevoegen
+        function onEachFeature(feature, layer) {
+            // Tooltip bij hoveren (Nummer + Naam van departement)
+            layer.bindTooltip(`<strong>${feature.properties.code}</strong> - ${feature.properties.nom}`, {
+                sticky: true,
+                className: 'custom-tooltip'
+            });
+
+            layer.on({
+                mouseover: function (e) {
+                    const l = e.target;
+                    l.setStyle({
+                        weight: 3,
+                        color: '#3498db', // Lichtblauwe rand bij hover
+                        fillOpacity: 0.9
+                    });
+                    if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) {
+                        l.bringToFront();
+                    }
+                    labelLayerGroup.bringToFront(); // Zorg dat nummers bovenop blijven liggen
+                },
+                mouseout: function (e) {
+                    geojsonLayer.resetStyle(e.target);
+                },
+                click: function (e) {
+                    toggleDepartment(feature.properties.code, e.target);
+                }
+            });
+
+            // Subtiel nummer in het geografische midden plaatsen
+            const center = layer.getBounds().getCenter();
+            const labelMarker = L.marker(center, {
+                icon: L.divIcon({
+                    className: 'dept-label',
+                    html: `<span>${feature.properties.code}</span>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                }),
+                interactive: false // Zorgt dat je door het nummer heen kunt klikken
+            });
+            labelLayerGroup.addLayer(labelMarker);
+        }
+
+        // 4. Laad de officiële vereenvoudigde Franse GeoJSON data via Open Data GitHub
+        fetch('https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/departements-version-simplifiee.geojson')
+            .then(response => response.json())
+            .then(data => {
+                // Filter eventuele overzeese gebieden eruit als je puur France Métropolitaine wilt (optioneel)
+                // Dit bestand bevat standaard de 96 departementen van het vasteland + Corsica.
+                
+                geojsonLayer = L.geoJSON(data, {
+                    style: getStyle,
+                    onEachFeature: onEachFeature
+                }).addTo(map);
+
+                updateStats();
+            })
+            .catch(error => console.error('Fout bij laden kaartgegevens:', error));
+
+        // 5. Zoekfunctie functionaliteit
+        function performSearch() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            if (!query || !geojsonLayer) return;
+
+            let foundLayer = null;
+
+            geojsonLayer.eachLayer(layer => {
+                const code = layer.feature.properties.code.toLowerCase();
+                const nom = layer.feature.properties.nom.toLowerCase();
+
+                if (code === query || nom === query || nom.includes(query)) {
+                    foundLayer = layer;
+                }
+            });
+
+            if (foundLayer) {
+                map.fitBounds(foundLayer.getBounds(), { maxZoom: 8, padding: [40, 40] });
+                
+                // Laat het gevonden gebied kort flashen in het rood om op te vallen
+                foundLayer.setStyle({ color: '#e74c3c', weight: 4 });
+                setTimeout(() => geojsonLayer.resetStyle(foundLayer), 2000);
+            } else {
+                alert('Departement niet gevonden. Zoek op nummer (bijv. 84) of naam (bijv. Vaucluse).');
+            }
+        }
+
+        document.getElementById('searchBtn').addEventListener('click', performSearch);
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') performSearch();
+        });
+
+        // 6. Data Exporteren (JSON download)
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(seenDepartments));
+            const downloadAnchor = document.createElement('a');
+            downloadAnchor.setAttribute("href", dataStr);
+            downloadAnchor.setAttribute("download", "frankrijk_kentekens_voortgang.json");
+            document.body.appendChild(downloadAnchor);
+            downloadAnchor.click();
+            downloadAnchor.remove();
+        });
+
+        // 7. Data Importeren (JSON inlezen)
+        document.getElementById('importBtn').addEventListener('click', () => {
+            document.getElementById('importFile').click();
+        });
+
+        document.getElementById('importFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                try {
+                    const importedData = JSON.parse(evt.target.result);
+                    if (Array.isArray(importedData)) {
+                        seenDepartments = importedData;
+                        localStorage.setItem('fr_seen_plates', JSON.stringify(seenDepartments));
+                        
+                        // Kaart en stats direct updaten
+                        geojsonLayer.eachLayer(layer => geojsonLayer.resetStyle(layer));
+                        updateStats();
+                        alert('Voortgang succesvol geladen!');
+                    } else {
+                        alert('Fout: Bestand heeft niet het juiste formaat.');
+                    }
+                } catch (err) {
+                    alert('Fout bij het lezen van het bestand.');
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // 8. Reset knop
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            if (confirm('Weet je zeker dat je alle afgestreepte kentekens wilt wissen? Dit kan niet ongedaan worden gemaakt.')) {
+                seenDepartments = [];
+                localStorage.removeItem('fr_seen_plates');
+                geojsonLayer.eachLayer(layer => geojsonLayer.resetStyle(layer));
+                updateStats();
+            }
+        });
+    </script>
+</body>
+</html>
