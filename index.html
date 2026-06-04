@@ -20,25 +20,45 @@
         input[type="text"]:focus { border-color: #3498db; }
         button { padding: 10px 15px; border: none; border-radius: 6px; background-color: #3498db; color: white; font-weight: 600; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #2980b9; }
+        
         .actions { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+        .btn-share { background-color: #2ecc71; font-size: 1.05rem; padding: 12px 15px; margin-bottom: 10px; }
+        .btn-share:hover { background-color: #27ae60; }
         .btn-secondary { background-color: #95a5a6; }
         .btn-secondary:hover { background-color: #7f8c8d; }
-        .btn-danger { background-color: #e74c3c; margin-top: 15px; }
+        .btn-danger { background-color: #e74c3c; margin-top: 5px; }
         .btn-danger:hover { background-color: #c0392b; }
-        #map { flex: 1; background-color: #f8f9fa; }
-        .dept-label { color: #2c3e50; font-family: sans-serif; font-size: 11px; font-weight: 700; text-align: center; pointer-events: none; text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff; }
         
-        /* Locatie status indicator */
-        #location-status { font-size: 0.8rem; margin-top: 10px; color: #7f8c8d; display: flex; align-items: center; gap: 5px;}
-        .dot { height: 8px; width: 8px; background-color: #ccc; border-radius: 50%; display: inline-block; }
-        .dot.active { background-color: #3498db; }
+        /* Kaartcontainer */
+        #map-container { flex: 1; position: relative; height: 100%; }
+        #map { width: 100%; height: 100%; background-color: #f8f9fa; }
+        
+        /* Watermerk / Stats overlay op de kaart voor de screenshot */
+        #map-watermark {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 999;
+            pointer-events: none;
+            display: none; /* Wordt alleen getoond tijdens screenshot */
+            border: 2px solid #27ae60;
+        }
+        #map-watermark h3 { font-size: 1rem; color: #2c3e50; }
+        #map-watermark p { font-size: 1.2rem; font-weight: bold; color: #27ae60; text-align: center;}
+
+        .dept-label { color: #2c3e50; font-family: sans-serif; font-size: 11px; font-weight: 700; text-align: center; pointer-events: none; text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff; }
 
         @media (max-width: 768px) {
             body { flex-direction: column; }
             #sidebar { width: 100%; height: auto; padding: 15px; }
-            #map { height: 60vh; }
+            #map-container { height: 60vh; }
             .actions { flex-direction: row; flex-wrap: wrap; }
-            .actions button { flex: 1; }
+            .actions button { flex: 1; min-width: 130px; }
+            .btn-share { width: 100%; }
         }
     </style>
 </head>
@@ -51,7 +71,6 @@
         <div class="stats-container">
             <div id="stats-text">0 / 0 gezien</div>
             <p style="font-size: 0.85rem; color: #7f8c8d;">van alle departementen afgevinkt</p>
-            <div id="location-status"><span class="dot" id="loc-dot"></span> <span id="loc-text">Locatie zoeken...</span></div>
         </div>
 
         <div class="search-box">
@@ -60,6 +79,7 @@
         </div>
 
         <div class="actions">
+            <button id="shareBtn" class="btn-share">Deel Resultaat (Afbeelding)</button>
             <button id="exportBtn" class="btn-secondary">Exporteer Logboek</button>
             <button id="importBtn" class="btn-secondary">Importeer Logboek</button>
             <input type="file" id="importFile" style="display: none;" accept=".json">
@@ -67,60 +87,31 @@
         </div>
     </div>
 
-    <div id="map"></div>
+    <div id="map-container">
+        <div id="map"></div>
+        <div id="map-watermark">
+            <h3>Mijn Voortgang</h3>
+            <p id="watermark-stats">0 / 0</p>
+        </div>
+    </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
         // --- 1. GLOBALE VARIABELEN & SETUP ---
-        const map = L.map('map', { zoomSnap: 0.5, minZoom: 5.5, maxZoom: 10 }).setView([46.4, 2.3], 6);
+        const map = L.map('map', { zoomSnap: 0.5, minZoom: 5.5, maxZoom: 10, zoomControl: true }).setView([46.4, 2.3], 6);
         let geojsonLayer;
         let labelLayerGroup = L.layerGroup().addTo(map);
         
-        // Huidige data inladen of leeg starten
+        // Data inladen of leeg starten
         let seenDepartments = JSON.parse(localStorage.getItem('fr_seen_plates')) || [];
-        
-        // Locatie variabelen
-        let currentLat = null;
-        let currentLng = null;
-        let userMarker = null;
 
-        // --- 2. LOCATIE TRACKING ---
-        if ("geolocation" in navigator) {
-            navigator.geolocation.watchPosition(
-                (position) => {
-                    currentLat = position.coords.latitude;
-                    currentLng = position.coords.longitude;
-                    
-                    document.getElementById('loc-dot').classList.add('active');
-                    document.getElementById('loc-text').innerText = "Locatie actief";
-
-                    // Teken of verplaats de blauwe stip op de kaart
-                    if (!userMarker) {
-                        userMarker = L.circleMarker([currentLat, currentLng], {
-                            color: '#fff', weight: 2, fillColor: '#3498db', fillOpacity: 1, radius: 7
-                        }).addTo(map).bindTooltip("Jouw huidige locatie");
-                    } else {
-                        userMarker.setLatLng([currentLat, currentLng]);
-                    }
-                },
-                (error) => {
-                    document.getElementById('loc-text').innerText = "Locatie uitgeschakeld";
-                    console.log("Locatie geweigerd/niet beschikbaar. App gebruikt alleen tijd.");
-                },
-                { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
-            );
-        } else {
-            document.getElementById('loc-text').innerText = "Locatie niet ondersteund";
-        }
-
-        // --- 3. HULPFUNCTIES VOOR DATA ---
-        // Helper om te checken of een code gezien is (ondersteunt oude string format én nieuwe object format)
+        // --- 2. HULPFUNCTIES VOOR DATA ---
         function isCodeSeen(code) {
             return seenDepartments.some(item => typeof item === 'string' ? item === code : item.code === code);
         }
 
-        // Styling definities
         function getStyle(feature) {
             const code = feature.properties.code;
             const isSeen = isCodeSeen(code);
@@ -135,28 +126,22 @@
             const total = geojsonLayer.getLayers().length;
             const seenCount = seenDepartments.length;
             const percentage = total > 0 ? Math.round((seenCount / total) * 100) : 0;
-            document.getElementById('stats-text').innerText = `${seenCount} van de ${total} (${percentage}%)`;
+            
+            const text = `${seenCount} van de ${total} (${percentage}%)`;
+            document.getElementById('stats-text').innerText = text;
+            document.getElementById('watermark-stats').innerText = `${seenCount} / ${total}`;
         }
 
-        // --- 4. KLIK & OPSLAAN LOGICA ---
         function toggleDepartment(code, layer) {
-            // Zoek of hij er al in staat
             const index = seenDepartments.findIndex(item => typeof item === 'string' ? item === code : item.code === code);
             
             if (index > -1) {
-                // Al gezien? Verwijder hem dan.
                 seenDepartments.splice(index, 1); 
             } else {
-                // Nieuw? Voeg toe met tijd en locatie (als beschikbaar)
-                const newEntry = {
+                seenDepartments.push({
                     code: code,
-                    timestamp: new Date().toISOString() // Slaat tijd op als bijv: "2026-06-03T10:15:00.000Z"
-                };
-                if (currentLat !== null && currentLng !== null) {
-                    newEntry.lat = currentLat;
-                    newEntry.lng = currentLng;
-                }
-                seenDepartments.push(newEntry);
+                    timestamp: new Date().toISOString()
+                });
             }
             
             localStorage.setItem('fr_seen_plates', JSON.stringify(seenDepartments));
@@ -164,7 +149,7 @@
             updateStats();
         }
 
-        // --- 5. KAART OPBOUWEN ---
+        // --- 3. KAART OPBOUWEN ---
         function onEachFeature(feature, layer) {
             layer.bindTooltip(`<strong>${feature.properties.code}</strong> - ${feature.properties.nom}`, { sticky: true });
 
@@ -195,7 +180,7 @@
             })
             .catch(error => console.error('Fout bij laden kaartgegevens:', error));
 
-        // --- 6. ZOEKFUNCTIE ---
+        // --- 4. ZOEKFUNCTIE ---
         function performSearch() {
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             if (!query || !geojsonLayer) return;
@@ -217,12 +202,62 @@
         document.getElementById('searchBtn').addEventListener('click', performSearch);
         document.getElementById('searchInput').addEventListener('keypress', e => { if (e.key === 'Enter') performSearch(); });
 
-        // --- 7. EXPORT / IMPORT / RESET ---
+        // --- 5. AFBEELDING MAKEN & DELEN (WHATSAPP OPTIMALISATIE) ---
+        document.getElementById('shareBtn').addEventListener('click', () => {
+            const watermark = document.getElementById('map-watermark');
+            const shareBtn = document.getElementById('shareBtn');
+            
+            shareBtn.innerText = "Afbeelding maken...";
+            shareBtn.disabled = true;
+            
+            // Toon tijdelijk het statistieken-watermerk op de kaart voor de foto
+            watermark.style.display = 'block';
+
+            // Geef Leaflet een fractie van een seconde om eventuele animaties te stoppen
+            setTimeout(() => {
+                html2canvas(document.getElementById('map-container'), {
+                    useCORS: true, // Zorgt dat externe kaart-elementen goed laden
+                    allowTaint: true
+                }).then(canvas => {
+                    // Verberg het watermerk weer op de live kaart
+                    watermark.style.display = 'none';
+                    shareBtn.innerText = "Deel Resultaat (Afbeelding)";
+                    shareBtn.disabled = false;
+
+                    // Zet canvas om naar een echt PNG bestand (Blob)
+                    canvas.toBlob(blob => {
+                        const file = new File([blob], "mijn_franse_kentekens.png", { type: "image/png" });
+                        
+                        // Check of de iPhone (Safari/Chrome) delen van bestanden ondersteunt via het deelmenu
+                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                            navigator.share({
+                                files: [file],
+                                title: 'Mijn Franse Kentekens Voortgang',
+                                text: 'Kijk hoe ver ik al ben met het spotten van Franse kentekens!'
+                            }).catch(err => console.log("Delen geannuleerd of mislukt:", err));
+                        } else {
+                            // Systeem ondersteunt geen direct delen? Dan als automatische download (fallback)
+                            const link = document.createElement('a');
+                            link.download = 'mijn_franse_kentekens.png';
+                            link.href = canvas.toDataURL();
+                            link.click();
+                            alert("Direct delen niet ondersteund door je browser. De afbeelding is gedownload naar je iPhone, je kunt hem nu zelf in WhatsApp bijvoegen!");
+                        }
+                    }, 'image/png');
+                }).catch(err => {
+                    watermark.style.display = 'none';
+                    shareBtn.innerText = "Deel Resultaat (Afbeelding)";
+                    shareBtn.disabled = false;
+                    alert("Er ging iets mis bij het genereren van de afbeelding.");
+                });
+            }, 300);
+        });
+
+        // --- 6. EXPORT / IMPORT / RESET ---
         document.getElementById('exportBtn').addEventListener('click', () => {
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(seenDepartments, null, 2));
             const downloadAnchor = document.createElement('a');
             downloadAnchor.setAttribute("href", dataStr);
-            // Genereer een bestandsnaam met de huidige datum
             const dateString = new Date().toISOString().split('T')[0];
             downloadAnchor.setAttribute("download", `kenteken_logboek_${dateString}.json`);
             document.body.appendChild(downloadAnchor);
