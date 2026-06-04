@@ -9,9 +9,9 @@
     
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
-        body { display: flex; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; }
+        body { display: flex; height: 100vh; background-color: #f4f6f9; color: #333; overflow: hidden; position: relative; }
         
-        /* Sidebar Styling met Mobiele optimalisatie */
+        /* Sidebar Styling */
         #sidebar { width: 350px; background-color: #ffffff; box-shadow: 4px 0 15px rgba(0,0,0,0.05); display: flex; flex-direction: column; padding: 25px; z-index: 1000; }
         h1 { font-size: 1.4rem; margin-bottom: 2px; color: #2c3e50; }
         .subtitle { font-size: 0.8rem; color: #7f8c8d; margin-bottom: 15px; }
@@ -23,7 +23,7 @@
         input[type="text"] { flex: 1; padding: 8px 12px; border: 1px solid #ced4da; border-radius: 6px; font-size: 0.9rem; outline: none; }
         input[type="text"]:focus { border-color: #3498db; }
         
-        /* Compacte en strakke Knoppen Layout */
+        /* Knoppen Layout */
         button { padding: 9px 12px; border: none; border-radius: 6px; background-color: #3498db; color: white; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: background-color 0.2s; }
         button:hover { background-color: #2980b9; }
         
@@ -38,12 +38,11 @@
         .btn-danger:hover { background-color: #c0392b; }
         
         /* Kaart element */
-        #map-container { flex: 1; position: relative; height: 100%; background-color: #f8f9fa; }
+        #map-container { flex: 1; position: relative; height: 100%; background-color: #f8f9fa; z-index: 1; }
         #map { width: 100%; height: 100%; }
         
         .dept-label { color: #2c3e50; font-family: sans-serif; font-size: 10px; font-weight: 700; text-align: center; pointer-events: none; text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff; }
 
-        /* CSS Media Query speciaal voor iPhones/Mobiel */
         @media (max-width: 768px) {
             body { flex-direction: column; }
             #sidebar { width: 100%; height: auto; padding: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
@@ -89,14 +88,15 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <script>
-        // --- 1. GLOBALE VARIABELEN & SETUP ---
+        // --- GLOBALE VARIABELEN ---
         const map = L.map('map', { zoomSnap: 0.1, minZoom: 4, maxZoom: 10 }).setView([46.4, 2.3], 5.8);
         let geojsonLayer;
         let labelLayerGroup = L.layerGroup().addTo(map);
         
+        let rawGeoJsonData = null; // Bewaren we voor de export foto
         let seenDepartments = JSON.parse(localStorage.getItem('fr_seen_plates')) || [];
 
-        // --- 2. HULPFUNCTIES VOOR DATA ---
+        // --- HULPFUNCTIES ---
         function isCodeSeen(code) {
             return seenDepartments.some(item => typeof item === 'string' ? item === code : item.code === code);
         }
@@ -118,17 +118,14 @@
 
         function toggleDepartment(code, layer) {
             const index = seenDepartments.findIndex(item => typeof item === 'string' ? item === code : item.code === code);
-            if (index > -1) {
-                seenDepartments.splice(index, 1); 
-            } else {
-                seenDepartments.push({ code: code, timestamp: new Date().toISOString() });
-            }
+            if (index > -1) { seenDepartments.splice(index, 1); } 
+            else { seenDepartments.push({ code: code, timestamp: new Date().toISOString() }); }
             localStorage.setItem('fr_seen_plates', JSON.stringify(seenDepartments));
             geojsonLayer.resetStyle(layer);
             updateStats();
         }
 
-        // --- 3. KAART OPBOUWEN ---
+        // --- KAART OPBOUWEN ---
         function onEachFeature(feature, layer) {
             layer.bindTooltip(`<strong>${feature.properties.code}</strong> - ${feature.properties.nom}`, { sticky: true });
             layer.on({
@@ -145,18 +142,18 @@
             labelLayerGroup.addLayer(labelMarker);
         }
 
-        // Automatische zoom aanpassen aan iPhone schermformaat bij opstarten
         if (window.innerWidth < 768) { map.setView([46.4, 2.3], 5.0); }
 
         fetch('https://raw.githubusercontent.com/gregoiredavid/france-geojson/master/departements-version-simplifiee.geojson')
             .then(response => response.json())
             .then(data => {
+                rawGeoJsonData = data;
                 geojsonLayer = L.geoJSON(data, { style: getStyle, onEachFeature: onEachFeature }).addTo(map);
                 updateStats();
             })
             .catch(error => console.error('Fout bij laden kaartgegevens:', error));
 
-        // --- 4. ZOEKFUNCTIE ---
+        // --- ZOEKFUNCTIE ---
         function performSearch() {
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             if (!query || !geojsonLayer) return;
@@ -176,108 +173,122 @@
         document.getElementById('searchBtn').addEventListener('click', performSearch);
         document.getElementById('searchInput').addEventListener('keypress', e => { if (e.key === 'Enter') performSearch(); });
 
-        // --- 5. HYBRIDE AFBEELDING MAKEN & DELEN (100% WATERDICHT) ---
+        // --- EXPORT FOTO: DE SPOOK-KAART METHODE ---
         document.getElementById('shareBtn').addEventListener('click', () => {
             const shareBtn = document.getElementById('shareBtn');
-            const container = document.getElementById('map-container');
-            
-            shareBtn.innerText = "⏳ Momentje...";
+            if (!rawGeoJsonData) {
+                alert("De kaart is nog niet volledig geladen.");
+                return;
+            }
+
+            shareBtn.innerText = "⏳ Genereren...";
             shareBtn.disabled = true;
 
-            // Sla de huidige styling van de kaart op mobiel op
-            const originalStyle = container.getAttribute('style') || '';
-            
-            // STAP 1: Transformeer de kaart tijdelijk naar een perfecte, grote, vaste 600x600 vierkant box
-            container.style.cssText = 'position: fixed; top: 0; left: 0; width: 600px; height: 600px; z-index: 99999; background: #f8f9fa;';
-            map.invalidateSize({ animate: false });
-            map.setView([46.4, 2.4], 5.5, { animate: false }); // Zoom perfect uit zodat heel Frankrijk erop past
+            // STAP 1: Maak een verborgen container (800x800) helemaal achteraan in het scherm
+            const exportDiv = document.createElement('div');
+            exportDiv.style.position = 'fixed';
+            exportDiv.style.top = '0';
+            exportDiv.style.left = '0';
+            exportDiv.style.width = '800px';
+            exportDiv.style.height = '800px';
+            exportDiv.style.zIndex = '-1000'; // Veilig verstopt achter je applicatie
+            exportDiv.style.backgroundColor = '#f8f9fa';
+            document.body.appendChild(exportDiv);
 
-            // STAP 2: Verberg tijdelijk de HTML nummers om de html2canvas scroll-bug te omzeilen
-            map.removeLayer(labelLayerGroup);
+            // STAP 2: Maak hierin een tijdelijke Leaflet kaart aan die wél ingesteld is op de perfecte zoom
+            const exportMap = L.map(exportDiv, {
+                zoomControl: false, // Geen + en - knoppen op de foto!
+                attributionControl: false,
+                zoomSnap: 0.1,
+                preferCanvas: true // Dwingt Leaflet om te tekenen als Canvas (lost de iOS bugs op)
+            }).setView([46.4, 2.6], 6.0); // Perfect uitgezoomd voor een vlak van 800x800
 
-            // Geef de iPhone 350ms de tijd om de nieuwe layout intern te verwerken
+            // STAP 3: Teken ALLEEN de gekleurde vlakken (dus GEEN zwevende nummers toevoegen)
+            const exportLayer = L.geoJSON(rawGeoJsonData, {
+                style: function(feature) {
+                    return {
+                        fillColor: isCodeSeen(feature.properties.code) ? '#2ecc71' : '#e0e0e0',
+                        weight: 1.5, opacity: 1, color: '#ffffff', fillOpacity: 1
+                    };
+                }
+            }).addTo(exportMap);
+
+            // STAP 4: Wacht een halve seconde zodat Leaflet zijn tekening af heeft, maak dan de foto
             setTimeout(() => {
-                html2canvas(container, {
-                    useCORS: true, logging: false, width: 600, height: 600, scrollX: 0, scrollY: 0
+                html2canvas(exportDiv, {
+                    useCORS: true,
+                    scale: 1,
+                    logging: false,
+                    backgroundColor: '#f8f9fa'
                 }).then(mapCanvas => {
                     
-                    // STAP 3: Maak een gloednieuw canvas (600 breed, 700 hoog) voor de extra infobalk onderaan
+                    // STAP 5: Maak het definitieve doek (800x900) voor de foto inclusief banner
                     const finalCanvas = document.createElement('canvas');
+                    finalCanvas.width = 800;
+                    finalCanvas.height = 900;
                     const ctx = finalCanvas.getContext('2d');
-                    finalCanvas.width = 600;
-                    finalCanvas.height = 700; // 600px kaart + 100px witte balk onderaan
 
-                    // Kleur de achtergrond lichtgrijs/wit
+                    // Plak de kaart-foto op het doek
                     ctx.fillStyle = '#f8f9fa';
-                    ctx.fillRect(0, 0, 600, 700);
-
-                    // Teken de gemaakte foto van de kaartvormen op het nieuwe canvas
+                    ctx.fillRect(0, 0, 800, 800);
                     ctx.drawImage(mapCanvas, 0, 0);
 
-                    // STAP 4: Teken nu handmatig met code de nummers op de juiste plek over de foto heen!
-                    ctx.font = 'bold 11px sans-serif';
+                    // STAP 6: De Truc! We berekenen de wiskundige positie van elk gebied en schilderen
+                    // de nummers nu als harde 'inkt' over de tekening. Geen CSS bugs meer mogelijk.
+                    ctx.font = 'bold 13px -apple-system, BlinkMacSystemFont, sans-serif';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
 
-                    geojsonLayer.eachLayer(layer => {
+                    exportLayer.eachLayer(layer => {
                         const code = layer.feature.properties.code;
                         const center = layer.getBounds().getCenter();
-                        
-                        // Vraag aan Leaflet waar dit departement nu exact ligt op de 600x600 foto
-                        const point = map.latLngToContainerPoint(center);
+                        const point = exportMap.latLngToContainerPoint(center);
 
-                        // Wit randje om het nummer heen tekenen voor maximale leesbaarheid (net als CSS text-shadow)
+                        // Witte rand rondom het getal
                         ctx.fillStyle = '#ffffff';
-                        ctx.fillText(code, point.x - 1, point.y);
-                        ctx.fillText(code, point.x + 1, point.y);
-                        ctx.fillText(code, point.x, point.y - 1);
-                        ctx.fillText(code, point.x, point.y + 1);
+                        ctx.fillText(code, point.x - 1.5, point.y);
+                        ctx.fillText(code, point.x + 1.5, point.y);
+                        ctx.fillText(code, point.x, point.y - 1.5);
+                        ctx.fillText(code, point.x, point.y + 1.5);
 
-                        // Het nummer zelf in donkerblauw schrijven
+                        // Donkere tekst
                         ctx.fillStyle = '#2c3e50';
                         ctx.fillText(code, point.x, point.y);
                     });
 
-                    // STAP 5: Bouw de strakke witte statistieken-banner onderaan de afbeelding
+                    // Ruim de tijdelijke spoken-kaart direct op, we hebben hem niet meer nodig
+                    exportMap.remove();
+                    document.body.removeChild(exportDiv);
+
+                    // STAP 7: Teken de statistieken banner eronder
                     ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 600, 600, 100);
+                    ctx.fillRect(0, 800, 800, 100);
                     
                     ctx.strokeStyle = '#e9ecef';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath(); ctx.moveTo(0, 600); ctx.lineTo(600, 600); ctx.stroke();
+                    ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.moveTo(0, 800); ctx.lineTo(800, 800); ctx.stroke();
 
-                    // Titel linksonder in de banner
                     ctx.fillStyle = '#2c3e50';
-                    ctx.font = 'bold 20px -apple-system, BlinkMacSystemFont, sans-serif';
+                    ctx.font = 'bold 26px -apple-system, BlinkMacSystemFont, sans-serif';
                     ctx.textAlign = 'left';
-                    ctx.fillText('Frankrijk Kenteken Tracker', 30, 655);
+                    ctx.fillText('Frankrijk Kenteken Tracker', 40, 855);
 
-                    // Statistieken rechtsonder in de banner
-                    const total = geojsonLayer.getLayers().length;
+                    const total = rawGeoJsonData.features.length;
                     const seenCount = seenDepartments.length;
                     const percentage = total > 0 ? Math.round((seenCount / total) * 100) : 0;
 
                     ctx.fillStyle = '#27ae60';
-                    ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, sans-serif';
+                    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, sans-serif';
                     ctx.textAlign = 'right';
-                    ctx.fillText(`${seenCount} / ${total} Gezien (${percentage}%)`, 570, 655);
+                    ctx.fillText(`${seenCount} / ${total} Gezien (${percentage}%)`, 760, 855);
 
-                    // STAP 6: HERSTEL DE KAART DIRECT NAAR DE NORMALE MOBIELE MODUS
-                    if (originalStyle) { container.setAttribute('style', originalStyle); } 
-                    else { container.removeAttribute('style'); }
-                    
-                    map.addLayer(labelLayerGroup);
-                    if (window.innerWidth < 768) { map.setView([46.4, 2.3], 5.0, { animate: false }); } 
-                    else { map.setView([46.4, 2.3], 5.8, { animate: false }); }
-                    map.invalidateSize({ animate: false });
-
-                    shareBtn.innerText = "📤 Deel Voortgang";
-                    shareBtn.disabled = false;
-
-                    // STAP 7: Converteer de complete infographic naar een PNG en open het iOS-deelmenu
+                    // STAP 8: Zet om naar PNG en start het delen
                     finalCanvas.toBlob(blob => {
                         const file = new File([blob], "mijn_kenteken_voortgang.png", { type: "image/png" });
                         
+                        shareBtn.innerText = "📤 Deel Voortgang";
+                        shareBtn.disabled = false;
+
                         if (navigator.canShare && navigator.canShare({ files: [file] })) {
                             navigator.share({
                                 files: [file],
@@ -285,28 +296,25 @@
                                 text: 'Kijk hoe ver ik al ben met het spotten van Franse kentekens!'
                             }).catch(err => console.log("Delen geannuleerd"));
                         } else {
-                            // Fallback voor oudere iOS versies of privé-tabbladen
                             const link = document.createElement('a');
                             link.download = 'mijn_franse_kentekens.png';
                             link.href = finalCanvas.toDataURL();
                             link.click();
-                            alert("Afbeelding opgeslagen in je Downloads! Je kunt hem nu handmatig toevoegen in WhatsApp.");
+                            alert("Afbeelding opgeslagen in je Downloads! Voeg hem handmatig toe in WhatsApp.");
                         }
                     }, 'image/png');
 
                 }).catch(err => {
-                    // Fail-safe herstel bij fouten
-                    if (originalStyle) { container.setAttribute('style', originalStyle); } else { container.removeAttribute('style'); }
-                    map.addLayer(labelLayerGroup);
-                    map.invalidateSize({ animate: false });
+                    exportMap.remove();
+                    document.body.removeChild(exportDiv);
                     shareBtn.innerText = "📤 Deel Voortgang";
                     shareBtn.disabled = false;
                     alert("Er ging iets mis bij het genereren.");
                 });
-            }, 350);
+            }, 500);
         });
 
-        // --- 6. EXPORT / IMPORT / RESET ---
+        // --- EXPORT / IMPORT / RESET ---
         document.getElementById('exportBtn').addEventListener('click', () => {
             const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(seenDepartments, null, 2));
             const downloadAnchor = document.createElement('a');
